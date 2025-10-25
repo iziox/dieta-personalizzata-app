@@ -246,6 +246,15 @@
       font-size: 0.75rem;
       padding: 6px 10px;
     }
+    /* Stile per intestazione dei giorni nella pianificazione settimanale */
+    .day-row td {
+      background: #f1f5f9;
+      font-weight: 600;
+      font-size: 0.9rem;
+      padding-top: 6px;
+      padding-bottom: 4px;
+      color: var(--primary-dark);
+    }
     footer {
       text-align: center;
       padding: 24px;
@@ -295,6 +304,12 @@
       </div>
       <p class="note">I valori inseriti vengono salvati automaticamente e ripristinati al caricamento.</p>
       <div class="history" id="historyList"></div>
+      <!-- Controlli per importare/esportare lo storico: utili per trasferire le diete su altri dispositivi -->
+      <div class="btn-group" style="margin-top:12px;">
+        <button id="exportHist" class="primary">Esporta storico</button>
+        <button id="importHist" class="warn">Importa storico</button>
+        <input type="file" id="importFile" accept=".json" style="display:none;" />
+      </div>
     </section>
     <!-- Anteprima -->
     <section class="preview">
@@ -370,6 +385,9 @@
     history: document.getElementById('historyList')
     , notes: document.getElementById('notes')
     , notesInPdf: document.getElementById('notesInPdf')
+    , exportHist: document.getElementById('exportHist')
+    , importHist: document.getElementById('importHist')
+    , importFile: document.getElementById('importFile')
   };
   let currentPlanData = null;
 
@@ -503,6 +521,9 @@
     ]
   };
 
+  // Nomi dei giorni della settimana (per la pianificazione settimanale)
+  const WEEK_DAYS = ['Lunedì','Martedì','Mercoledì','Giovedì','Venerdì','Sabato','Domenica'];
+
   /*
    * Analizza il campo "note" e restituisce una politica con esclusioni e spostamenti di calorie.
    * Le note sono trattate con semplici regole: riconosce intolleranze (lattosio, glutine), stili (vegano, vegetariano),
@@ -569,6 +590,21 @@
     }
     const total = meals.reduce((s, m) => s + m.kcal, 0);
     return { meals, totalKcal: Math.round(total) };
+  }
+
+  /**
+   * Genera un piano settimanale composto da 7 piani giornalieri.
+   * Ogni giorno utilizza lo stesso fabbisogno calorico e la stessa ripartizione percentuale.
+   * Si usa una copia degli array di inclusione/esclusione per evitare conflitti fra i giorni.
+   */
+  function generateWeeklyPlan(totalKcal, tol, inc, exc, dist) {
+    const week = [];
+    for (let i = 0; i < 7; i++) {
+      // clona le liste per ogni giorno per evitare side effects
+      const plan = generatePlanCustom(totalKcal, tol, [...inc], [...exc], dist);
+      week.push(plan);
+    }
+    return week;
   }
   function chooseFood(list, includes, excludes) {
     for (const inc of includes) {
@@ -687,6 +723,67 @@
     // abilita pulsanti
     els.save.disabled = false;
     els.pdf.disabled = false;
+    // Aggiorna intestazione a "GIORNALIERA"
+    const headEl = document.querySelector('#dietHead strong');
+    if (headEl) headEl.textContent = 'DIETA PERSONALIZZATA – GIORNALIERA';
+    // Aggiorna etichetta totale
+    const totLabelTd = document.querySelector('#dietTable tfoot tr td');
+    if (totLabelTd) totLabelTd.textContent = 'Totale giornata';
+  }
+
+  /**
+   * Renderizza un piano settimanale nella tabella centrale. Mostra un'intestazione per ogni giorno e
+   * ripete la struttura dei pasti. Aggiorna anche il totale settimana e abilita i pulsanti.
+   */
+  function renderWeeklyPlan(name, cal, weeklyPlan) {
+    currentPlanData = weeklyPlan;
+    // Aggiorna etichette
+    els.patientLabel.textContent = `Paziente: ${name || '—'}`;
+    els.kcalLabel.textContent = `Fabbisogno: ${cal} kcal`;
+    // Aggiorna intestazione a "SETTIMANALE"
+    const headEl2 = document.querySelector('#dietHead strong');
+    if (headEl2) headEl2.textContent = 'DIETA PERSONALIZZATA – SETTIMANALE';
+    // Pulisce la tabella
+    els.tbody.innerHTML = '';
+    let weeklyTotal = 0;
+    for (let i = 0; i < weeklyPlan.length; i++) {
+      const dayPlan = weeklyPlan[i];
+      const dayName = WEEK_DAYS[i] || `Giorno ${i + 1}`;
+      weeklyTotal += dayPlan.totalKcal || 0;
+      // Intestazione del giorno
+      const dayRow = document.createElement('tr');
+      dayRow.className = 'day-row';
+      dayRow.innerHTML = `<td colspan="3">${dayName}</td>`;
+      els.tbody.append(dayRow);
+      // Pasti per il giorno
+      for (const meal of dayPlan.meals) {
+        const trH = document.createElement('tr');
+        trH.className = 'meal-row';
+        trH.innerHTML = `<td colspan="3">${meal.name} <span class="tag">${meal.target} kcal</span></td>`;
+        els.tbody.append(trH);
+        for (const it of meal.items) {
+          const tr = document.createElement('tr');
+          const kc = fmtKcal(kcalOf(it.food, it.qty));
+          tr.innerHTML = `<td>${it.food.name}</td><td>${fmtQty(it.food, it.qty)}</td><td class="kcal">${kc}</td>`;
+          els.tbody.append(tr);
+        }
+        const sub = meal.items.reduce((s, it) => s + kcalOf(it.food, it.qty), 0);
+        const trS = document.createElement('tr');
+        trS.innerHTML = `<td class="subtotal">Subtotale</td><td></td><td class="kcal subtotal">${fmtKcal(sub)}</td>`;
+        els.tbody.append(trS);
+      }
+      const trTot = document.createElement('tr');
+      trTot.className = 'meal-row';
+      trTot.innerHTML = `<td>Totale giornata</td><td></td><td class="kcal">${dayPlan.totalKcal}</td>`;
+      els.tbody.append(trTot);
+    }
+    // Aggiorna totale settimana e etichetta
+    els.total.textContent = `${weeklyTotal}`;
+    const totLabelTd2 = document.querySelector('#dietTable tfoot tr td');
+    if (totLabelTd2) totLabelTd2.textContent = 'Totale settimana';
+    // Abilita pulsanti
+    els.save.disabled = false;
+    els.pdf.disabled = false;
   }
   function loadPlan(entry) {
     els.cal.value = entry.cal;
@@ -700,7 +797,12 @@
     // ripristina note e flag PDF
     if (entry.notes !== undefined) els.notes.value = entry.notes;
     if (entry.notesInPdf !== undefined) els.notesInPdf.checked = !!entry.notesInPdf;
-    renderPlan(entry.name, entry.cal, entry.plan);
+    // Se il piano è un array (7 giorni) usa la renderizzazione settimanale
+    if (Array.isArray(entry.plan)) {
+      renderWeeklyPlan(entry.name, entry.cal, entry.plan);
+    } else {
+      renderPlan(entry.name, entry.cal, entry.plan);
+    }
     saveLast();
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
@@ -743,11 +845,9 @@
     // normalizza
     const sumD = dist.reduce((a,b) => a + b, 0);
     dist = dist.map(p => p / sumD);
-    const plan = generatePlanCustom(cal, tol, inc, exc, dist);
-    renderPlan(name, cal, plan);
-    // abilita pulsanti
-    els.save.disabled = false;
-    els.pdf.disabled = false;
+    // Genera un piano settimanale (7 giorni) utilizzando lo stesso fabbisogno calorico
+    const weeklyPlan = generateWeeklyPlan(cal, tol, inc, exc, dist);
+    renderWeeklyPlan(name, cal, weeklyPlan);
     // Scroll to anteprima
     document.querySelector('.preview').scrollIntoView({ behavior:'smooth' });
   });
@@ -810,78 +910,154 @@
     // Import first fixed page
     const [f1] = await out.copyPages(firstPdf, [0]);
     out.addPage(f1);
-    // Create central dynamic page (A4 size)
-    const page = out.addPage([595, 842]);
+    // Se il piano contiene più giorni (array) verrà generata una pagina dinamica per ciascun giorno.
+    // Altrimenti viene generato il comportamento originale (giornaliero singolo).
+    const isWeekly = Array.isArray(data.plan);
+    // Carica i font una sola volta
     const font = await out.embedFont(StandardFonts.Helvetica);
     const fontB = await out.embedFont(StandardFonts.HelveticaBold);
-    let y = 800;
-    const x = 40;
-    const w = 515;
-    // Header
-    page.drawText('DIETA PERSONALIZZATA – GIORNALIERA', { x, y, size: 14, font: fontB });
-    y -= 18;
-    page.drawLine({ start: { x, y }, end: { x: x + w, y }, thickness: 1.5 });
-    y -= 20;
-    page.drawText(`Paziente: ${data.name || '—'}`, { x, y, size: 10, font });
-    page.drawText(`Fabbisogno: ${data.cal} kcal`, { x: x + 300, y, size: 10, font });
-    y -= 14;
-    // Calcola la ripartizione reale (percentuali) basandoti sui target della dieta
-    try {
-      const tot = data.plan.totalKcal || data.cal;
-      const pcs = (data.plan.meals || []).map(m => Math.round((m.target / tot) * 100));
-      const rip = pcs.join('% · ') + '%';
-      page.drawText('Ripartizione: ' + rip, { x, y, size: 8.5, font });
-    } catch(e) {
-      page.drawText('Ripartizione: 20% · 10% · 40% · 10% · 20%', { x, y, size: 8.5, font });
-    }
-    y -= 20;
-    // Se richiesto, inserisci un riepilogo delle note sulla pagina
-    if (data.includeNotes && data.notes) {
-      y -= 8;
-      page.drawText('Note / Osservazioni:', { x, y, size: 9.5, font: fontB });
-      y -= 12;
-      // suddividi le note in righe di lunghezza gestibile
-      const txt = String(data.notes);
-      let rem = txt;
-      while (rem.length > 0) {
-        let chunk = rem.slice(0, 90);
-        if (rem.length > 90) {
-          const idx = chunk.lastIndexOf(' ');
-          if (idx > 40) chunk = chunk.slice(0, idx);
+    if (isWeekly) {
+      const weekPlans = data.plan;
+      for (let i = 0; i < weekPlans.length; i++) {
+        const dayPlan = weekPlans[i];
+        const dayName = WEEK_DAYS[i] || `Giorno ${i + 1}`;
+        let page = out.addPage([595, 842]);
+        let y = 800;
+        const x = 40;
+        const w = 515;
+        // Intestazione della pagina
+        page.drawText(`DIETA PERSONALIZZATA – ${dayName}`, { x, y, size: 14, font: fontB });
+        y -= 18;
+        page.drawLine({ start: { x, y }, end: { x: x + w, y }, thickness: 1.5 });
+        y -= 20;
+        page.drawText(`Paziente: ${data.name || '—'}`, { x, y, size: 10, font });
+        page.drawText(`Fabbisogno: ${data.cal} kcal`, { x: x + 300, y, size: 10, font });
+        y -= 14;
+        // Ripartizione percentuale calcolata sul giorno
+        try {
+          const tot = dayPlan.totalKcal || data.cal;
+          const pcs = (dayPlan.meals || []).map(m => Math.round((m.target / tot) * 100));
+          const rip = pcs.join('% · ') + '%';
+          page.drawText('Ripartizione: ' + rip, { x, y, size: 8.5, font });
+        } catch(e) {
+          page.drawText('Ripartizione: 20% · 10% · 40% · 10% · 20%', { x, y, size: 8.5, font });
         }
-        const line = chunk.trim();
-        if (line) {
-          page.drawText(line, { x, y, size: 9, font });
-          y -= 10;
+        y -= 20;
+        // Inserisce le note solo sulla prima pagina dinamica
+        if (data.includeNotes && data.notes && i === 0) {
+          y -= 8;
+          page.drawText('Note / Osservazioni:', { x, y, size: 9.5, font: fontB });
+          y -= 12;
+          const txt = String(data.notes);
+          let rem = txt;
+          while (rem.length > 0) {
+            let chunk = rem.slice(0, 90);
+            if (rem.length > 90) {
+              const idx = chunk.lastIndexOf(' ');
+              if (idx > 40) chunk = chunk.slice(0, idx);
+            }
+            const line = chunk.trim();
+            if (line) {
+              page.drawText(line, { x, y, size: 9, font });
+              y -= 10;
+            }
+            rem = rem.slice(chunk.length).trimStart();
+          }
+          y -= 8;
         }
-        rem = rem.slice(chunk.length).trimStart();
+        // Funzione locale per disegnare righe di tabella
+        function drow(a, b, c, bold = false) {
+          const sz = bold ? 10 : 9;
+          const fnt = bold ? fontB : font;
+          page.drawText(a, { x, y, size: sz, font: fnt });
+          page.drawText(b, { x: x + 320, y, size: sz, font: fnt });
+          const txtWidth = fnt.widthOfTextAtSize(c, sz);
+          page.drawText(c, { x: x + w - txtWidth, y, size: sz, font: fnt });
+          y -= 12;
+        }
+        // Disegna i pasti del giorno
+        for (const m of dayPlan.meals) {
+          y -= 4;
+          drow(`${m.name} (target ${m.target} kcal)`, '', '', true);
+          y -= 4;
+          for (const it of m.items) {
+            const kc = Math.round(kcalOf(it.food, it.qty));
+            drow('• ' + it.food.name, fmtQty(it.food, it.qty), `${kc}`);
+          }
+          const sub = m.items.reduce((s, it) => s + kcalOf(it.food, it.qty), 0);
+          drow('Subtotale', '', `${Math.round(sub)}`);
+          y -= 6;
+        }
+        y -= 8;
+        drow('Totale giornata', '', `${dayPlan.totalKcal}`, true);
+      }
+    } else {
+      // Comportamento originale per un singolo piano giornaliero
+      const page = out.addPage([595, 842]);
+      let y = 800;
+      const x = 40;
+      const w = 515;
+      page.drawText('DIETA PERSONALIZZATA – GIORNALIERA', { x, y, size: 14, font: fontB });
+      y -= 18;
+      page.drawLine({ start: { x, y }, end: { x: x + w, y }, thickness: 1.5 });
+      y -= 20;
+      page.drawText(`Paziente: ${data.name || '—'}`, { x, y, size: 10, font });
+      page.drawText(`Fabbisogno: ${data.cal} kcal`, { x: x + 300, y, size: 10, font });
+      y -= 14;
+      try {
+        const tot = data.plan.totalKcal || data.cal;
+        const pcs = (data.plan.meals || []).map(m => Math.round((m.target / tot) * 100));
+        const rip = pcs.join('% · ') + '%';
+        page.drawText('Ripartizione: ' + rip, { x, y, size: 8.5, font });
+      } catch(e) {
+        page.drawText('Ripartizione: 20% · 10% · 40% · 10% · 20%', { x, y, size: 8.5, font });
+      }
+      y -= 20;
+      if (data.includeNotes && data.notes) {
+        y -= 8;
+        page.drawText('Note / Osservazioni:', { x, y, size: 9.5, font: fontB });
+        y -= 12;
+        const txt = String(data.notes);
+        let rem = txt;
+        while (rem.length > 0) {
+          let chunk = rem.slice(0, 90);
+          if (rem.length > 90) {
+            const idx = chunk.lastIndexOf(' ');
+            if (idx > 40) chunk = chunk.slice(0, idx);
+          }
+          const line = chunk.trim();
+          if (line) {
+            page.drawText(line, { x, y, size: 9, font });
+            y -= 10;
+          }
+          rem = rem.slice(chunk.length).trimStart();
+        }
+        y -= 8;
+      }
+      function drow(a, b, c, bold = false) {
+        const sz = bold ? 10 : 9;
+        const fnt = bold ? fontB : font;
+        page.drawText(a, { x, y, size: sz, font: fnt });
+        page.drawText(b, { x: x + 320, y, size: sz, font: fnt });
+        const txtWidth = fnt.widthOfTextAtSize(c, sz);
+        page.drawText(c, { x: x + w - txtWidth, y, size: sz, font: fnt });
+        y -= 12;
+      }
+      for (const m of data.plan.meals) {
+        y -= 4;
+        drow(`${m.name} (target ${m.target} kcal)`, '', '', true);
+        y -= 4;
+        for (const it of m.items) {
+          const kc = Math.round(kcalOf(it.food, it.qty));
+          drow('• ' + it.food.name, fmtQty(it.food, it.qty), `${kc}`);
+        }
+        const sub = m.items.reduce((s, it) => s + kcalOf(it.food, it.qty), 0);
+        drow('Subtotale', '', `${Math.round(sub)}`);
+        y -= 6;
       }
       y -= 8;
+      drow('Totale giornata', '', `${data.plan.totalKcal}`, true);
     }
-    // Draw table
-    function drawRow(a, b, c, bold = false) {
-      const size = bold ? 10 : 9;
-      const fnt = bold ? fontB : font;
-      page.drawText(a, { x, y, size, font: fnt });
-      page.drawText(b, { x: x + 320, y, size, font: fnt });
-      const txtWidth = fnt.widthOfTextAtSize(c, size);
-      page.drawText(c, { x: x + w - txtWidth, y, size, font: fnt });
-      y -= 12;
-    }
-    for (const m of data.plan.meals) {
-      y -= 4;
-      drawRow(`${m.name} (target ${m.target} kcal)`, '', '', true);
-      y -= 4;
-      for (const it of m.items) {
-        const kc = Math.round(kcalOf(it.food, it.qty));
-        drawRow('• ' + it.food.name, fmtQty(it.food, it.qty), `${kc}`);
-      }
-      const sub = m.items.reduce((s, it) => s + kcalOf(it.food, it.qty), 0);
-      drawRow('Subtotale', '', `${Math.round(sub)}`);
-      y -= 6;
-    }
-    y -= 8;
-    drawRow('Totale giornata', '', `${data.plan.totalKcal}`, true);
     // Import last fixed page
     const [l1] = await out.copyPages(lastPdf, [0]);
     out.addPage(l1);
@@ -894,6 +1070,45 @@
     link.click();
     setTimeout(() => URL.revokeObjectURL(link.href), 1000);
   }
+  // ----- Import / Export storico -----
+  // Esporta lo storico in un file JSON
+  els.exportHist.addEventListener('click', () => {
+    const arr = getHistory();
+    const json = JSON.stringify(arr || []);
+    const blob = new Blob([json], { type:'application/json' });
+    const fname = `dieta_storico_${new Date().toISOString().slice(0,10)}.json`;
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = fname;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  });
+  // Avvia il selettore file per importare uno storico
+  els.importHist.addEventListener('click', () => {
+    els.importFile.click();
+  });
+  // Gestisce l'import dello storico
+  els.importFile.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const arr = JSON.parse(ev.target.result);
+        if (Array.isArray(arr)) {
+          setHistory(arr);
+          renderHistory();
+        } else {
+          alert('File di storico non valido.');
+        }
+      } catch (err) {
+        alert('Errore durante la lettura del file di storico.');
+      }
+    };
+    reader.readAsText(file);
+    // Resetta l'input per permettere successive importazioni
+    e.target.value = '';
+  });
   // Inizializza
   loadLast();
   renderHistory();
