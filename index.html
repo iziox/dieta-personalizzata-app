@@ -1,0 +1,805 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Dieta Personalizzata</title>
+  <meta name="description" content="Web app per generare la sola pagina centrale di un prospetto dieta giornaliero, con export PDF tra due pagine fisse." />
+  <!-- pdf-lib -->
+  <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+  <style>
+    :root{
+      --bg:#f6f8fa;
+      --card:#ffffff;
+      --ink:#1b1f24;
+      --muted:#5b6779;
+      --accent:#0ea5e9;
+      --ok:#16a34a;
+      --warn:#f59e0b;
+      --danger:#ef4444;
+      --border: #e5e7eb;
+      --radius:14px;
+      --radius-sm:10px;
+      --shadow: 0 6px 24px rgba(0,0,0,.08);
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      --font: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%}
+    body{
+      margin:0;
+      font-family:var(--font);
+      color:var(--ink);
+      background:linear-gradient(180deg,#f7fafc,#eef2f7);
+    }
+    header{
+      padding:22px clamp(16px,3vw,28px);
+      display:flex; align-items:center; justify-content:space-between; gap:16px;
+    }
+    .brand{
+      font-weight:700; letter-spacing:.2px; font-size:clamp(18px,2.4vw,22px);
+    }
+    .brand small{font-weight:500; color:var(--muted)}
+    main{
+      padding:0 clamp(16px,3vw,28px) 28px;
+      max-width:1200px; margin:0 auto;
+    }
+    .grid{
+      display:grid; grid-template-columns: 360px 1fr; gap:22px; align-items:start;
+    }
+    @media (max-width: 980px){ .grid{grid-template-columns: 1fr} }
+    .card{
+      background:var(--card); border:1px solid var(--border);
+      border-radius:var(--radius); box-shadow:var(--shadow);
+    }
+    .pad{padding:18px}
+    h2{margin:0 0 14px; font-size:18px}
+    label{display:block; font-size:14px; color:var(--muted); margin-bottom:6px}
+    input[type="text"], textarea{
+      width:100%; padding:12px 14px; border-radius:10px; border:1px solid var(--border);
+      background:#fff; outline:none; font-size:15px;
+    }
+    textarea{min-height:88px; resize:vertical}
+    .row{display:flex; gap:12px; align-items:center}
+    .slider-row{display:flex; align-items:center; gap:12px; margin-bottom:12px}
+    input[type="range"]{width:100%}
+    .out{font-variant-numeric: tabular-nums; font-family:var(--mono); color:var(--ink)}
+    .hint{font-size:12px; color:var(--muted)}
+    .btns{display:flex; flex-wrap:wrap; gap:10px; margin-top:12px}
+    button{
+      appearance:none; border:1px solid var(--border); background:#fff; color:var(--ink);
+      padding:10px 14px; border-radius:10px; font-weight:600; cursor:pointer;
+    }
+    button.primary{background:var(--accent); border-color:transparent; color:#fff}
+    button.success{background:var(--ok); color:#fff; border-color:transparent}
+    button.warn{background:var(--warn); color:#111; border-color:transparent}
+    button[disabled]{opacity:.55; cursor:not-allowed}
+
+    /* Anteprima pagine (A4 ratio) */
+    .preview{
+      display:grid; grid-template-columns: repeat(3, 1fr); gap:14px; align-items:start;
+    }
+    @media (max-width: 1160px){ .preview{grid-template-columns: 1fr} }
+    .page{
+      background:white; border:1px solid var(--border); border-radius:var(--radius-sm);
+      box-shadow:var(--shadow); padding:0; overflow:hidden; position:relative;
+      aspect-ratio: 210 / 297; /* A4 */
+      display:flex; flex-direction:column;
+    }
+    .page .inner{padding:24px; overflow:auto}
+    .locked .lock-badge{
+      position:absolute; inset:10px auto auto 10px;
+      background:rgba(0,0,0,.66); color:#fff; padding:6px 10px; border-radius:8px; font-size:12px;
+      backdrop-filter:saturate(140%) blur(2px);
+    }
+    .page img{width:100%; height:100%; object-fit:contain; display:block; background:#fff}
+    .header-line{
+      border-bottom:2px solid #111; padding-bottom:10px; margin-bottom:16px;
+    }
+    .meta{color:var(--muted); font-size:13px}
+    table{
+      width:100%; border-collapse:collapse; font-size:14px;
+    }
+    th, td{border-bottom:1px dashed #eaeaea; padding:8px 6px; vertical-align:top}
+    th{color:#111; text-align:left}
+    .meal{background:#f8fafc; font-weight:700}
+    .kcal{text-align:right; font-variant-numeric: tabular-nums; font-family:var(--mono)}
+    .small{font-size:12px; color:var(--muted)}
+    .tot{font-weight:700}
+    .tag{display:inline-block; font-size:11px; padding:2px 6px; border-radius:999px; background:#eef6ff; color:#084c9e; margin-right:6px}
+    .muted{color:var(--muted)}
+
+    /* Storico */
+    .history-list{display:flex; flex-direction:column; gap:8px}
+    .history-item{
+      display:flex; align-items:center; justify-content:space-between; gap:8px;
+      background:#fff; border:1px solid var(--border); padding:10px 12px; border-radius:10px;
+    }
+    .history-item .meta{font-size:13px}
+    .right{display:flex; gap:8px}
+    footer{padding:16px; color:var(--muted); font-size:12px; text-align:center}
+    .pill{display:inline-flex; align-items:center; gap:6px; background:#f3f4f6; padding:4px 8px; border-radius:999px}
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">Dieta Personalizzata <small>– genera solo la pagina centrale</small></div>
+    <div class="pill"><span>Calcolo con tolleranza</span> <strong id="tolLabel">±8%</strong></div>
+  </header>
+
+  <main class="grid">
+    <!-- Pannello di controllo -->
+    <section class="card pad">
+      <h2>Impostazioni</h2>
+
+      <div class="slider-row">
+        <label for="cal">Calorie (500–4000)</label>
+        <input id="cal" type="range" min="500" max="4000" step="50" value="2000" />
+        <output id="calOut" class="out">2000 kcal</output>
+      </div>
+
+      <div class="row">
+        <div style="flex:1">
+          <label for="name">Nome paziente</label>
+          <input id="name" type="text" placeholder="Es. Mario Rossi" />
+        </div>
+      </div>
+
+      <div style="margin-top:10px">
+        <label for="inc">Alimenti da includere <span class="hint">(separati da virgola)</span></label>
+        <textarea id="inc" placeholder="es. tonno, avocado, yogurt greco"></textarea>
+      </div>
+
+      <div style="margin-top:10px">
+        <label for="exc">Alimenti da escludere <span class="hint">(separati da virgola)</span></label>
+        <textarea id="exc" placeholder="es. lattosio, glutine, arachidi"></textarea>
+      </div>
+
+      <div class="row" style="margin-top:10px">
+        <div style="flex:1">
+          <label for="tol">Tolleranza calorie (5–8%)</label>
+          <input id="tol" type="range" min="5" max="8" step="1" value="8" />
+        </div>
+        <div class="out" id="tolOut">±8%</div>
+      </div>
+
+      <div class="btns">
+        <button id="gen" class="primary">Genera Dieta</button>
+        <button id="save" class="success" disabled>Salva in Storico</button>
+        <button id="pdf" class="warn" disabled>Esporta PDF</button>
+      </div>
+
+      <p class="hint" style="margin-top:10px">
+        I valori inseriti vengono salvati automaticamente e ripristinati all'apertura.
+      </p>
+
+      <hr style="margin:18px 0;border:0;border-top:1px solid var(--border)">
+      <h2>Storico</h2>
+      <div id="history" class="history-list"></div>
+    </section>
+
+    <!-- Anteprima a 3 pagine -->
+    <section class="preview">
+      <div class="page locked card" id="page1">
+        <div class="lock-badge">Pagina 1 fissa (bloccata)</div>
+        <!-- Cambia il path sotto con la tua immagine -->
+        <img id="p1img" alt="Frontespizio fisso" />
+      </div>
+
+      <div class="page card" id="pageDiet">
+        <div class="inner">
+          <div class="header-line">
+            <div style="display:flex; justify-content:space-between; align-items:baseline; gap:8px; flex-wrap:wrap">
+              <div>
+                <strong>DIETA PERSONALIZZATA – GIORNALIERA</strong>
+                <div class="meta">
+                  <span id="pazNome">Paziente: —</span> ·
+                  <span id="kcalNeed">Fabbisogno: — kcal</span>
+                </div>
+              </div>
+              <div class="meta">Ripartizione orientativa: 20% · 10% · 40% · 10% · 20%</div>
+            </div>
+          </div>
+
+          <table id="dietTable" aria-describedby="kcalNeed">
+            <thead>
+              <tr>
+                <th>Sezione / Alimento</th>
+                <th>Quantità</th>
+                <th class="kcal">kcal stimate</th>
+              </tr>
+            </thead>
+            <tbody id="dietBody">
+              <tr><td colspan="3" class="muted">Premi <strong>Genera Dieta</strong> per compilare questa pagina.</td></tr>
+            </tbody>
+            <tfoot>
+              <tr class="tot">
+                <td>Totale giornata</td>
+                <td></td>
+                <td class="kcal" id="totKcal">—</td>
+              </tr>
+            </tfoot>
+          </table>
+
+          <p class="small" style="margin-top:10px">
+            * Le calorie sono stime basate su porzioni standard (± tolleranza impostata). Gli alimenti esclusi non vengono mai inseriti; quelli da includere sono integrati quando compatibili.
+          </p>
+        </div>
+      </div>
+
+      <div class="page locked card" id="pageLast">
+        <div class="lock-badge">Ultima pagina fissa (bloccata)</div>
+        <!-- Cambia il path sotto con la tua immagine -->
+        <img id="plastimg" alt="Consigli fissi" />
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    Export PDF: unisce <strong>pagina 1 fissa</strong> + <strong>pagina dieta generata</strong> + <strong>ultima pagina fissa</strong>. Le pagine fisse sono asset statici e non vengono modificate.
+  </footer>
+
+  <script>
+  /******************************************************
+   * CONFIGURAZIONE ASSET
+   ******************************************************/
+  // Variante A (UN SOLO PDF con pag. 1 + ultima): usa questo file
+  const FIXED_PDF_URL = "/assets/pagine_fisse.pdf"; // <-- metti qui il PDF con dentro la pagina 1 e l'ultima
+  const USE_SINGLE_FIXED_PDF = true;                // true = Variante A (consigliata)
+  // Variante B (DUE PDF separati): usa questi file e metti USE_SINGLE_FIXED_PDF=false
+  const FIRST_PAGE_PDF = "/assets/pagina1.pdf";
+  const LAST_PAGE_PDF  = "/assets/paginaUltima.pdf";
+
+  // Immagini per anteprima (devono essere la riproduzione esatta delle pagine fisse)
+  const FIRST_PAGE_IMG = "/assets/pagina1.png";
+  const LAST_PAGE_IMG  = "/assets/paginaUltima.png";
+
+  // Carica immagini anteprima
+  document.getElementById("p1img").src = FIRST_PAGE_IMG;
+  document.getElementById("plastimg").src = LAST_PAGE_IMG;
+
+  /******************************************************
+   * STATO + PERSISTENZA
+   ******************************************************/
+  const $ = sel => document.querySelector(sel);
+  const els = {
+    cal: $('#cal'), calOut: $('#calOut'), name: $('#name'),
+    inc: $('#inc'), exc: $('#exc'), tol: $('#tol'), tolOut: $('#tolOut'),
+    tolLabel: $('#tolLabel'),
+    gen: $('#gen'), save: $('#save'), pdf: $('#pdf'),
+    pazNome: $('#pazNome'), kcalNeed: $('#kcalNeed'),
+    body: $('#dietBody'), tot: $('#totKcal'), history: $('#history')
+  };
+  function norm(s){ return (s||'').toString().toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu,'').trim(); }
+  function splitList(val){
+    return (val||'').split(',').map(s=>norm(s)).filter(Boolean);
+  }
+  const LS_LAST = 'dp_last_v1';
+  const LS_HIST = 'dp_history_v1';
+
+  function saveLast(){
+    const obj = {
+      name: els.name.value, cal: +els.cal.value,
+      inc: els.inc.value, exc: els.exc.value, tol: +els.tol.value
+    };
+    localStorage.setItem(LS_LAST, JSON.stringify(obj));
+  }
+  function loadLast(){
+    const raw = localStorage.getItem(LS_LAST);
+    if(!raw) return;
+    try{
+      const o = JSON.parse(raw);
+      if(o.name) els.name.value = o.name;
+      if(o.cal) els.cal.value = o.cal, els.calOut.textContent = `${o.cal} kcal`;
+      if(o.inc!=null) els.inc.value = o.inc;
+      if(o.exc!=null) els.exc.value = o.exc;
+      if(o.tol) els.tol.value = o.tol, els.tolOut.textContent = `±${o.tol}%`, els.tolLabel.textContent = `±${o.tol}%`;
+    }catch{}
+  }
+  function getHistory(){
+    try{ return JSON.parse(localStorage.getItem(LS_HIST) || '[]'); }catch{ return []; }
+  }
+  function setHistory(arr){ localStorage.setItem(LS_HIST, JSON.stringify(arr||[])); }
+  function addToHistory(entry){
+    const arr = getHistory();
+    arr.unshift(entry); setHistory(arr); renderHistory();
+  }
+  function renderHistory(){
+    const arr = getHistory();
+    els.history.innerHTML = '';
+    if(!arr.length){ els.history.innerHTML = '<div class="muted">Nessuna dieta in storico.</div>'; return; }
+    for(const item of arr){
+      const div = document.createElement('div');
+      div.className='history-item';
+      const left = document.createElement('div');
+      left.innerHTML = `<div class="meta"><strong>${item.name||'Senza nome'}</strong> · ${item.cal} kcal · ${new Date(item.ts).toLocaleString()}</div>`;
+      const right = document.createElement('div'); right.className='right';
+      const b1 = document.createElement('button'); b1.textContent='Ricarica';
+      const b2 = document.createElement('button'); b2.textContent='Elimina'; b2.style.background='var(--danger)'; b2.style.color='#fff'; b2.style.borderColor='transparent';
+      b1.onclick = ()=>{ loadPlan(item); };
+      b2.onclick = ()=>{
+        const arr2 = getHistory().filter(x=>x.id!==item.id); setHistory(arr2); renderHistory();
+      };
+      right.append(b1,b2); div.append(left,right); els.history.append(div);
+    }
+  }
+
+  /******************************************************
+   * DATABASE ALIMENTI (kcal per 100g salvo indicazioni)
+   ******************************************************/
+  const FOODS = {
+    // grassi & condimenti
+    fats: [
+      {key:'olio evo', name:'Olio EVO', kcal100: 900, unit: 'g'},
+      {key:'avocado', name:'Avocado', kcal100: 160, unit: 'g'},
+      {key:'burro di mandorle', name:'Burro di mandorle', kcal100: 614, unit: 'g'},
+      {key:'burro di arachidi', name:'Burro di arachidi', kcal100: 588, unit: 'g'},
+      {key:'noci', name:'Noci', kcal100: 654, unit:'g'},
+      {key:'mandorle', name:'Mandorle', kcal100: 579, unit:'g'},
+      {key:'semi di zucca', name:'Semi di zucca', kcal100: 559, unit:'g'},
+      {key:'semi di lino', name:'Semi di lino', kcal100: 534, unit:'g'},
+      {key:'semi di chia', name:'Semi di chia', kcal100: 486, unit:'g'}
+    ],
+    carbs: [
+      {key:'fiocchi avena', name:"Fiocchi d'avena", kcal100:389, unit:'g'},
+      {key:'muesli', name:'Muesli', kcal100:370, unit:'g'},
+      {key:'pane integrale', name:'Pane integrale', kcal100:250, unit:'g'},
+      {key:'riso basmati', name:'Riso basmati (crudo)', kcal100:360, unit:'g'},
+      {key:'pasta integrale', name:'Pasta integrale (cruda)', kcal100:350, unit:'g'},
+      {key:'quinoa', name:'Quinoa (cruda)', kcal100:368, unit:'g'},
+      {key:'farro', name:'Farro (crudo)', kcal100:335, unit:'g'},
+      {key:'bulgur', name:'Bulgur (crudo)', kcal100:342, unit:'g'},
+      {key:'couscous integrale', name:'Couscous integrale (crudo)', kcal100:360, unit:'g'},
+      {key:'orzo perlato', name:'Orzo perlato (crudo)', kcal100:340, unit:'g'},
+      {key:'patate dolci', name:'Patate dolci', kcal100:86, unit:'g'},
+      {key:'crackers integrali', name:'Crackers integrali', kcal100:430, unit:'g'}
+    ],
+    proteins: [
+      {key:'pollo', name:'Petto di pollo (cotto)', kcal100:165, unit:'g'},
+      {key:'tacchino', name:'Tacchino (cotto)', kcal100:135, unit:'g'},
+      {key:'tonno', name:'Tonno al naturale (sgocciolato)', kcal100:116, unit:'g'},
+      {key:'salmone', name:'Salmone (cotto)', kcal100:208, unit:'g'},
+      {key:'gamberi', name:'Gamberi', kcal100:99, unit:'g'},
+      {key:'tofu', name:'Tofu', kcal100:76, unit:'g'},
+      {key:'ceci', name:'Ceci (cotti)', kcal100:164, unit:'g'},
+      {key:'lenticchie', name:'Lenticchie (cotte)', kcal100:116, unit:'g'},
+      {key:'feta', name:'Feta', kcal100:265, unit:'g'},
+      {key:'uova', name:'Uova intere', unit:'pz', kcalPerUnit:78, gramsPerUnit:50}
+    ],
+    dairy: [
+      {key:'yogurt greco', name:'Yogurt greco 0%', kcal100:59, unit:'g'},
+      {key:'latte avena', name:"Latte d'avena", kcal100:47, unit:'ml'},
+      {key:'proteine', name:'Proteine in polvere', kcal100:390, unit:'g'}
+    ],
+    fruits: [
+      {key:'mela', name:'Mela', kcal100:52, unit:'g'},
+      {key:'pera', name:'Pera', kcal100:57, unit:'g'},
+      {key:'banana', name:'Banana', kcal100:89, unit:'g'},
+      {key:'frutti bosco', name:'Frutti di bosco', kcal100:50, unit:'g'}
+    ],
+    veggies: [
+      {key:'spinaci', name:'Spinaci', kcal100:23, unit:'g'},
+      {key:'zucchine', name:'Zucchine', kcal100:17, unit:'g'},
+      {key:'carote', name:'Carote', kcal100:41, unit:'g'},
+      {key:'pomodorini', name:'Pomodorini', kcal100:18, unit:'g'},
+      {key:'insalata', name:'Insalata', kcal100:15, unit:'g'},
+      {key:'broccoli', name:'Broccoli', kcal100:34, unit:'g'},
+      {key:'cavolo cappuccio', name:'Cavolo cappuccio', kcal100:25, unit:'g'},
+      {key:'verdure grigliate', name:'Verdure grigliate', kcal100:35, unit:'g'}
+    ],
+    sweeteners: [
+      {key:'miele', name:'Miele', kcal100:304, unit:'g'},
+      {key:'cacao', name:'Cacao amaro', kcal100:228, unit:'g'}
+    ]
+  };
+
+  // Ricerca alimento per termine (inclusioni) preferendo match inizio-parola
+  function findFood(term){
+    const t = norm(term);
+    const pools = Object.values(FOODS).flat();
+    // prova match su key
+    let cand = pools.find(x => norm(x.key).includes(t));
+    if(cand) return cand;
+    // prova match su name
+    cand = pools.find(x => norm(x.name).includes(t));
+    return cand || null;
+  }
+
+  // Esclusione: se il termine appare nel name/key -> escluso
+  function isExcluded(food, excTerms){
+    const k = norm(food.key||food.name);
+    return excTerms.some(e => k.includes(e));
+  }
+
+  function kcalOf(food, qty){
+    if(food.unit === 'pz') return (food.kcalPerUnit || 0) * qty;
+    const per100 = food.kcal100 || 0;
+    return per100 * (qty/100);
+  }
+
+  function fmtQty(food, qty){
+    if(food.unit === 'pz') return `${qty} pz`;
+    return `${Math.round(qty)} ${food.unit}`;
+  }
+
+  function fmtK(k){ return `${Math.round(k)}`; }
+
+  /******************************************************
+   * GENERAZIONE PASTI
+   ******************************************************/
+  function clamp(n,min,max){ return Math.max(min, Math.min(max, n)); }
+
+  function buildBreakfast(target, inc, exc){
+    // Template: Yogurt greco + avena + frutta + frutta secca + (opz) miele
+    const yogurt = FOODS.dairy.find(f=>f.key==='yogurt greco');
+    const oats   = FOODS.carbs.find(f=>f.key==='fiocchi avena');
+    const fruit  = chooseAllowed(FOODS.fruits, inc, exc);
+    const nuts   = chooseAllowed([FOODS.fats.find(f=>f.key==='mandorle'), FOODS.fats.find(f=>f.key==='noci'), FOODS.fats.find(f=>f.key==='semi di zucca')].filter(Boolean), inc, exc);
+    const honey  = FOODS.sweeteners.find(f=>f.key==='miele');
+
+    let items = [
+      {food: yogurt, qty: 170},
+      {food: oats, qty: 40},
+      {food: fruit, qty: 100},
+      {food: nuts, qty: 15}
+    ].filter(x=>x.food && !isExcluded(x.food, exc));
+
+    // Se inclusioni contengono "proteine" o "latte d'avena", prova a integrare
+    const includePowder = inc.some(t=>norm(t).includes('proteine'));
+    if(includePowder && !isExcluded(FOODS.dairy.find(f=>f.key==='proteine'), exc)){
+      items.push({food: FOODS.dairy.find(f=>f.key==='proteine'), qty: 20});
+    }
+
+    // Se target alto, aggiungi un filo di miele
+    items.push({food:honey, qty:10});
+    items = items.filter(x=>x.food && !isExcluded(x.food, exc));
+
+    // Aggiusta energia variando avena e frutta secca (e miele)
+    items = tuneEnergy(items, target, ['fiocchi avena','mandorle','noci','semi di zucca','miele'], 0.7, 1.5);
+    return items;
+  }
+
+  function buildSnack(target, inc, exc){
+    // Template: frutta + frutta secca oppure yogurt + avena
+    const fruit  = chooseAllowed(FOODS.fruits, inc, exc);
+    const nuts   = chooseAllowed([FOODS.fats.find(f=>f.key==='mandorle'), FOODS.fats.find(f=>f.key==='noci')].filter(Boolean), inc, exc);
+    let items = [
+      {food: fruit, qty: 150},
+      {food: nuts, qty: 15}
+    ].filter(x=>x.food && !isExcluded(x.food, exc));
+
+    // Se inclusioni contengono "yogurt", usa alternativa yogurt-based
+    const wantsYogurt = inc.some(t=>norm(t).includes('yogurt'));
+    if(wantsYogurt && !isExcluded(FOODS.dairy.find(f=>f.key==='yogurt greco'), exc)){
+      items = [
+        {food: FOODS.dairy.find(f=>f.key==='yogurt greco'), qty: 170},
+        {food: FOODS.carbs.find(f=>f.key==='fiocchi avena'), qty: 15}
+      ].filter(x=>x.food && !isExcluded(x.food, exc));
+    }
+
+    items = tuneEnergy(items, target, [items[1]?.food?.key||''], 0.7, 1.8);
+    return items;
+  }
+
+  function buildLunchOrDinner(target, inc, exc){
+    // Template: cereale + proteina + verdura + olio
+    const carb = chooseAllowed([ 'riso basmati','pasta integrale','quinoa','farro','bulgur','couscous integrale','orzo perlato','patate dolci' ].map(k=>FOODS.carbs.find(f=>f.key===k)), inc, exc);
+    const prot = chooseAllowed([ 'pollo','tacchino','tonno','salmone','gamberi','tofu','ceci','lenticchie','feta','uova' ].map(k=>FOODS.proteins.find(f=>f.key===k)), inc, exc);
+    const veg  = chooseAllowed([ 'zucchine','carote','spinaci','pomodorini','insalata','broccoli','cavolo cappuccio','verdure grigliate' ].map(k=>FOODS.veggies.find(f=>f.key===k)), inc, exc);
+    const oil  = FOODS.fats.find(f=>f.key==='olio evo');
+
+    let items = [];
+    if(carb && !isExcluded(carb,exc)) items.push({food: carb, qty: (carb.key==='patate dolci'? 250: 80)});
+    if(prot && !isExcluded(prot,exc)) items.push({food: prot, qty: prot.unit==='pz'? 2 : (prot.key==='feta'? 40: 120)});
+    if(veg  && !isExcluded(veg,exc))  items.push({food: veg , qty: 200});
+    if(oil  && !isExcluded(oil,exc))  items.push({food: oil , qty: 12});
+
+    // Se l'inclusione richiede 'avocado' e non è escluso, aggiungi 40g e riduci olio
+    const wantsAvo = inc.some(t=>norm(t).includes('avocado'));
+    const avo = FOODS.fats.find(f=>f.key==='avocado');
+    if(wantsAvo && avo && !isExcluded(avo,exc)){
+      items.push({food: avo, qty: 40});
+      const oilIdx = items.findIndex(x=>x.food.key==='olio evo'); if(oilIdx>-1){ items[oilIdx].qty = Math.max(8, items[oilIdx].qty-4); }
+    }
+
+    items = tuneEnergy(items, target, [carb?.key||'', 'olio evo', 'avocado', 'feta'], 0.6, 1.6);
+    return items;
+  }
+
+  // Sceglie il primo alimento compatibile, privilegiando inclusioni
+  function chooseAllowed(list, inc, exc){
+    if(!list || !list.length) return null;
+    // priorità inclusioni
+    for(const t of inc){
+      const f = list.find(x => norm(x.key).includes(norm(t)) || norm(x.name).includes(norm(t)));
+      if(f && !isExcluded(f, exc)) return f;
+    }
+    // poi il primo disponibile non escluso
+    return list.find(x=>!isExcluded(x, exc)) || null;
+  }
+
+  // Regola porzioni per avvicinarsi al target agendo su "chiavi" scalabili
+  function tuneEnergy(items, target, scalableKeys=[], minScale=0.8, maxScale=1.4){
+    const scaleables = items.filter(x=> scalableKeys.some(k => k && x.food.key.includes(k)));
+    function energyOf(list){ return list.reduce((s,x)=> s + kcalOf(x.food, x.qty), 0); }
+    let E = energyOf(items);
+    let guard = 0;
+    while(Math.abs(E - target) > target*0.02 && guard < 40 && scaleables.length){
+      const diff = target - E;
+      // scala il primo elemento scalabile (per semplicità)
+      const s = scaleables[0];
+      const base = s.qty;
+      const factor = clamp(1 + diff/Math.max(200, target), minScale, maxScale); // step mite
+      s.qty = clamp(base * factor, base*minScale, base*maxScale);
+      E = energyOf(items); guard++;
+    }
+    return items;
+  }
+
+  function generatePlan(totalKcal, tolPct, incTerms, excTerms){
+    // Ripartizione: 20%, 10%, 40%, 10%, 20%
+    const dist = [0.20, 0.10, 0.40, 0.10, 0.20];
+    const targets = dist.map(p => Math.round(totalKcal * p));
+    const meals = [];
+    // builder per ciascun pasto
+    const b1 = buildBreakfast(targets[0], incTerms, excTerms);
+    const s1 = buildSnack(targets[1], incTerms, excTerms);
+    const l  = buildLunchOrDinner(targets[2], incTerms, excTerms);
+    const s2 = buildSnack(targets[3], incTerms, excTerms);
+    const d  = buildLunchOrDinner(targets[4], incTerms, excTerms);
+
+    const names = ['Colazione','Spuntino mattutino','Pranzo','Spuntino pomeridiano','Cena'];
+    const groups = [b1,s1,l,s2,d];
+    for(let i=0;i<5;i++){
+      const items = (groups[i]||[]).filter(Boolean);
+      const kcal = items.reduce((s,x)=> s + kcalOf(x.food, x.qty), 0);
+      meals.push({ name: names[i], target: targets[i], items, kcal });
+    }
+    // verifica tolleranza
+    const total = meals.reduce((s,m)=>s+m.kcal,0);
+    const min = totalKcal*(1 - tolPct/100), max = totalKcal*(1 + tolPct/100);
+    const ok = total>=min && total<=max;
+
+    // Se fuori range, prova piccolo aggiustamento sui carbo dei pasti principali
+    if(!ok){
+      for(const m of [meals[2], meals[4]]){
+        const carb = m.items.find(x=> ['riso basmati','pasta integrale','quinoa','farro','bulgur','couscous integrale','orzo perlato','patate dolci'].includes(x.food.key));
+        if(!carb) continue;
+        const diff = (totalKcal - total)/2;
+        const step = (carb.food.key==='patate dolci'? 30 : 10);
+        const delta = clamp(diff, -120, 120); // grammi-equivalenti limitati
+        carb.qty = clamp(carb.qty + (delta>0? step: -step), 50, (carb.food.key==='patate dolci'? 400: 110));
+      }
+    }
+
+    const finalTotal = meals.reduce((s,m)=> s + m.items.reduce((q,x)=>q+kcalOf(x.food,x.qty),0),0);
+    return { meals, totalKcal: Math.round(finalTotal) };
+  }
+
+  /******************************************************
+   * RENDER TABELLA CENTRALE
+   ******************************************************/
+  function renderPlan(name, totalKcal, plan){
+    els.pazNome.textContent = `Paziente: ${name||'—'}`;
+    els.kcalNeed.textContent = `Fabbisogno: ${totalKcal} kcal`;
+    els.body.innerHTML = '';
+
+    for(const meal of plan.meals){
+      // intestazione sezione
+      const trH = document.createElement('tr');
+      trH.className='meal';
+      trH.innerHTML = `<td colspan="3">${meal.name} <span class="tag">${meal.target} kcal target</span></td>`;
+      els.body.append(trH);
+
+      // righe alimenti
+      for(const it of meal.items){
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${it.food.name}</td>
+          <td>${fmtQty(it.food, it.qty)}</td>
+          <td class="kcal">${fmtK(kcalOf(it.food,it.qty))}</td>
+        `;
+        els.body.append(tr);
+      }
+
+      // subtotale
+      const sub = document.createElement('tr');
+      sub.innerHTML = `<td class="small">Subtotale</td><td></td><td class="kcal small">${fmtK(meal.items.reduce((s,x)=>s+kcalOf(x.food,x.qty),0))}</td>`;
+      els.body.append(sub);
+    }
+
+    els.tot.textContent = `${fmtK(plan.totalKcal)} kcal`;
+    // abilita pulsanti
+    els.save.disabled = false;
+    els.pdf.disabled = false;
+  }
+
+  function loadPlan(entry){
+    els.name.value = entry.name||'';
+    els.cal.value = entry.cal||2000; els.calOut.textContent = `${els.cal.value} kcal`;
+    els.inc.value = entry.inc||''; els.exc.value = entry.exc||'';
+    els.tol.value = entry.tol||8; els.tolOut.textContent = `±${els.tol.value}%`; els.tolLabel.textContent = `±${els.tol.value}%`;
+    renderPlan(entry.name, entry.cal, entry.plan);
+    saveLast();
+    window.scrollTo({top:0, behavior:'smooth'});
+  }
+
+  /******************************************************
+   * EXPORT PDF: pagina fissa 1 + pagina dieta + pagina fissa ultima
+   ******************************************************/
+  async function exportPDF({name, cal, plan}){
+    const { PDFDocument, StandardFonts } = PDFLib;
+
+    // 1) carica i PDF fissi
+    let firstPdfBytes, lastPdfBytes;
+    if(USE_SINGLE_FIXED_PDF){
+      const bytes = await fetch(FIXED_PDF_URL).then(r=>r.arrayBuffer());
+      const src = await PDFDocument.load(bytes);
+      const indices = src.getPageIndices();
+      const first = await PDFDocument.create();
+      const last  = await PDFDocument.create();
+      const [p1] = await first.copyPages(src, [0]);
+      first.addPage(p1);
+      const [pl] = await last.copyPages(src, [indices[indices.length-1]]);
+      last.addPage(pl);
+      firstPdfBytes = await first.save();
+      lastPdfBytes  = await last.save();
+    } else {
+      firstPdfBytes = await fetch(FIRST_PAGE_PDF).then(r=>r.arrayBuffer());
+      lastPdfBytes  = await fetch(LAST_PAGE_PDF ).then(r=>r.arrayBuffer());
+    }
+
+    const firstPdf = await PDFDocument.load(firstPdfBytes);
+    const lastPdf  = await PDFDocument.load(lastPdfBytes);
+
+    // 2) Crea documento finale
+    const out = await PDFDocument.create();
+
+    // 2a) importa pagina 1 fissa
+    const [f1] = await out.copyPages(firstPdf, [0]);
+    out.addPage(f1);
+
+    // 2b) pagina centrale dinamica
+    const page = out.addPage([595, 842]); // A4 (pt)
+    const font = await out.embedFont(StandardFonts.Helvetica);
+    const fontB = await out.embedFont(StandardFonts.HelveticaBold);
+
+    let y = 800, x = 48, w = 499;
+
+    // Header
+    page.drawText('DIETA PERSONALIZZATA – GIORNALIERA', {x, y, size:14, font:fontB});
+    y -= 16;
+    page.drawLine({ start: {x, y}, end: {x+w, y}, thickness: 1.6 });
+    y -= 20;
+    page.drawText(`Paziente: ${name||'—'}`, {x, y, size:11, font});
+    page.drawText(`Fabbisogno: ${cal} kcal`, {x: x+300, y, size:11, font});
+    y -= 18;
+    page.drawText('Ripartizione orientativa: 20% · 10% · 40% · 10% · 20%', {x, y, size:10, font, color: undefined});
+    y -= 16;
+
+    // Tabella
+    function row(txt1, txt2, txt3, bold=false){
+      const size = bold? 11:10.5;
+      const fnt = bold? fontB: font;
+      page.drawText(txt1, {x, y, size, font: fnt});
+      page.drawText(txt2, {x: x+300, y, size, font: fnt});
+      const tw = font.widthOfTextAtSize(txt3, size);
+      page.drawText(txt3, {x: x+w - tw, y, size, font: fnt});
+      y -= 14;
+    }
+
+    for(const m of plan.meals){
+      y -= 4;
+      row(`${m.name}  (target ${m.target} kcal)`, '', '', true);
+      y -= 4;
+      for(const it of m.items){
+        const kc = Math.round(kcalOf(it.food, it.qty));
+        row(`• ${it.food.name}`, fmtQty(it.food, it.qty), `${kc}`);
+      }
+      const sub = Math.round(m.items.reduce((s,x)=> s + kcalOf(x.food,x.qty),0));
+      row('Subtotale','', `${sub}`);
+      y -= 6;
+    }
+    y -= 10;
+    row('Totale giornata','', `${plan.totalKcal}`, true);
+
+    // 2c) importa ultima pagina fissa
+    const [l1] = await out.copyPages(lastPdf, [0]);
+    out.addPage(l1);
+
+    // 3) salva
+    const bytes = await out.save();
+    const blob = new Blob([bytes], {type:'application/pdf'});
+    const fname = `Dieta_Personalizzata_${(name||'paziente').replace(/\s+/g,'_')}_${new Date().toISOString().slice(0,10)}.pdf`;
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = fname;
+    a.click();
+    setTimeout(()=>URL.revokeObjectURL(a.href), 1000);
+  }
+
+  /******************************************************
+   * EVENTI UI
+   ******************************************************/
+  // slider calorie
+  els.cal.addEventListener('input', ()=>{
+    els.calOut.textContent = `${els.cal.value} kcal`; saveLast();
+  });
+  els.name.addEventListener('input', saveLast);
+  els.inc.addEventListener('input', saveLast);
+  els.exc.addEventListener('input', saveLast);
+  els.tol.addEventListener('input', ()=>{
+    els.tolOut.textContent = `±${els.tol.value}%`;
+    els.tolLabel.textContent = `±${els.tol.value}%`;
+    saveLast();
+  });
+
+  // genera
+  els.gen.addEventListener('click', ()=>{
+    const name = els.name.value.trim();
+    const cal  = +els.cal.value;
+    const tol  = +els.tol.value;
+    const incT = splitList(els.inc.value);
+    const excT = splitList(els.exc.value);
+
+    const plan = generatePlan(cal, tol, incT, excT);
+    renderPlan(name, cal, plan);
+
+    // abilita salvataggio
+    els.save.disabled = false; els.pdf.disabled = false;
+
+    // autofocus avanti
+    document.getElementById('pageDiet').scrollIntoView({behavior:'smooth'});
+  });
+
+  // salva in storico
+  els.save.addEventListener('click', ()=>{
+    const name = els.name.value.trim();
+    const entry = {
+      id: crypto.randomUUID(), ts: Date.now(),
+      name, cal: +els.cal.value, inc: els.inc.value, exc: els.exc.value, tol: +els.tol.value,
+      plan: currentPlanFromTable()
+    };
+    addToHistory(entry);
+  });
+
+  // export pdf
+  els.pdf.addEventListener('click', async ()=>{
+    const entry = {
+      name: els.name.value.trim() || '—',
+      cal: +els.cal.value,
+      plan: currentPlanFromTable()
+    };
+    await exportPDF(entry);
+  });
+
+  // ricostruisce l'oggetto plan leggendo la tabella già renderizzata
+  function currentPlanFromTable(){
+    const rows = Array.from(els.body.querySelectorAll('tr'));
+    const meals = []; let cur = null;
+    for(const r of rows){
+      if(r.classList.contains('meal')){
+        const title = r.querySelector('td').textContent.trim();
+        const name = title.split('(target')[0].trim();
+        const target = +((title.match(/target\s+(\d+)/i)||[])[1]||0);
+        cur = {name, target, items:[], kcal:0}; meals.push(cur);
+        continue;
+      }
+      const tds = r.querySelectorAll('td');
+      if(tds.length===3 && !r.classList.contains('small')){
+        const food = tds[0].textContent.trim();
+        const qty  = tds[1].textContent.trim();
+        const kcal = +tds[2].textContent.trim();
+        cur?.items.push({ foodLabel: food, qtyLabel: qty, kcal });
+        cur.kcal += kcal;
+      }
+    }
+    const total = meals.reduce((s,m)=> s+m.kcal,0);
+    return { meals, totalKcal: Math.round(total) };
+  }
+
+  // init
+  loadLast();
+  renderHistory();
+  </script>
+</body>
+</html>
