@@ -274,6 +274,15 @@
       <textarea id="includeFoods" placeholder="es. tonno, avocado, yogurt greco"></textarea>
       <label for="excludeFoods">Alimenti da escludere (separati da virgola)</label>
       <textarea id="excludeFoods" placeholder="es. lattosio, glutine, arachidi"></textarea>
+      <!-- Campo note libero: qui Emanuela può inserire osservazioni cliniche o preferenze da tenere in considerazione per la generazione della dieta.  
+           Esempi: "intolleranza lattosio", "vegetariano", "ridurre sale", "post‑workout la sera", ecc.  -->
+      <label for="notes">Note (IA) – campo libero</label>
+      <textarea id="notes" placeholder="es. intolleranza lattosio, vegetariano, ridurre sale, post‑workout la sera"></textarea>
+      <!-- Opzione per includere le note nel PDF: se selezionata verrà aggiunto un breve riepilogo sulla pagina centrale del documento esportato -->
+      <label style="display:flex; align-items:center; gap:6px; font-size:0.8rem; margin-top:4px;">
+        <input type="checkbox" id="notesInPdf" />
+        <span>Includi le note nel PDF</span>
+      </label>
       <div class="slider">
         <label for="tolerance">Tolleranza</label>
         <input id="tolerance" type="range" min="5" max="8" step="1" value="8" />
@@ -359,6 +368,8 @@
     tbody: document.getElementById('dietBody'),
     total: document.getElementById('totalKcal'),
     history: document.getElementById('historyList')
+    , notes: document.getElementById('notes')
+    , notesInPdf: document.getElementById('notesInPdf')
   };
   let currentPlanData = null;
 
@@ -375,7 +386,15 @@
     return (val || '').split(',').map(s => normalize(s)).filter(Boolean);
   }
   function saveLast() {
-    const obj = { cal: +els.cal.value, name: els.name.value, inc: els.inc.value, exc: els.exc.value, tol: +els.tol.value };
+    const obj = {
+      cal: +els.cal.value,
+      name: els.name.value,
+      inc: els.inc.value,
+      exc: els.exc.value,
+      tol: +els.tol.value,
+      notes: els.notes.value,
+      notesInPdf: !!els.notesInPdf.checked
+    };
     localStorage.setItem(lsLast, JSON.stringify(obj));
   }
   function loadLast() {
@@ -388,6 +407,8 @@
       if (o.inc != null) els.inc.value = o.inc;
       if (o.exc != null) els.exc.value = o.exc;
       if (o.tol) { els.tol.value = o.tol; els.tolOut.textContent = `±${o.tol}%`; }
+      if (o.notes !== undefined) { els.notes.value = o.notes; }
+      if (o.notesInPdf !== undefined) { els.notesInPdf.checked = !!o.notesInPdf; }
     } catch {}
   }
   function getHistory() {
@@ -481,6 +502,74 @@
       { key:'cacao', name:'Cacao amaro', kcal100: 228, unit:'g' }
     ]
   };
+
+  /*
+   * Analizza il campo "note" e restituisce una politica con esclusioni e spostamenti di calorie.
+   * Le note sono trattate con semplici regole: riconosce intolleranze (lattosio, glutine), stili (vegano, vegetariano),
+   * riduzione del sale, e suggerimenti di ripartizione (es. post‑workout la sera sposta un po' di calorie dal pranzo alla cena).
+   */
+  function parseNotes(raw) {
+    const t = normalize(raw);
+    const policy = {
+      addExclusions: [],
+      addInclusions: [],
+      distroShift: { breakfast: 0, lunch: 0, dinner: 0 },
+      vegetarian: false,
+      vegan: false,
+      lactoseFree: false,
+      glutenFree: false,
+      lowSalt: false
+    };
+    if (!t) return policy;
+    if (t.includes('lattosio')) policy.lactoseFree = true;
+    if (t.includes('glutine')) policy.glutenFree = true;
+    if (t.includes('vegano')) policy.vegan = true;
+    else if (t.includes('vegetariano')) policy.vegetarian = true;
+    if (t.includes('ridurre sale') || t.includes('pressione') || t.includes('ipertensione')) policy.lowSalt = true;
+    if (t.includes('picchi glicemici') || t.includes('glicemia')) policy.addExclusions.push('miele');
+    if (t.includes('post workout') || t.includes('post-workout')) {
+      policy.distroShift.dinner += 0.05;
+      policy.distroShift.lunch -= 0.05;
+    }
+    return policy;
+  }
+
+  // Applica la politica alle liste di inclusione/esclusione. Modifica gli array passati per riferimento.
+  function applyPolicy(policy, inc, exc) {
+    if (policy.lactoseFree) {
+      exc.push('yogurt greco', 'feta');
+    }
+    if (policy.glutenFree) {
+      // escludi principali cereali con glutine
+      exc.push('pasta integrale', 'farro', 'pane integrale');
+    }
+    if (policy.lowSalt) {
+      exc.push('feta');
+    }
+    if (policy.vegan) {
+      exc.push('pollo','tacchino','salmone','tonno','uova','feta');
+    } else if (policy.vegetarian) {
+      exc.push('pollo','tacchino','salmone','tonno');
+    }
+    // Unisci eventuali eslcusioni/addizioni manuali
+    for (const a of policy.addExclusions) exc.push(a);
+    for (const a of policy.addInclusions) inc.push(a);
+  }
+
+  // Genera un piano personalizzato con una distribuzione arbitraria di calorie. Dist deve avere 5 elementi che sommano a 1.
+  function generatePlanCustom(totalKcal, tol, inc, exc, dist) {
+    const targets = dist.map(p => totalKcal * p);
+    const names   = ['Colazione','Spuntino mattutino','Pranzo','Spuntino pomeridiano','Cena'];
+    const builders= [buildBreakfast, buildSnack, buildMainMeal, buildSnack, buildMainMeal];
+    const meals = [];
+    for (let i = 0; i < 5; i++) {
+      const items = builders[i](targets[i], inc, exc);
+      const kcal  = items.reduce((s, it) => s + kcalOf(it.food, it.qty), 0);
+      meals.push({ name: names[i], target: Math.round(targets[i]), items, kcal: Math.round(kcal) });
+    }
+    const total = meals.reduce((s, m) => s + m.kcal, 0);
+    return { meals, totalKcal: Math.round(total) };
+  }
   function chooseFood(list, includes, excludes) {
     for (const inc of includes) {
       const f = list.find(item => normalize(item.key).includes(inc) || normalize(item.name).includes(inc));
@@ -608,6 +697,9 @@
     els.tol.value = entry.tol || 8;
     els.tolOut.textContent = `±${entry.tol}%`;
     currentPlanData = entry.plan;
+    // ripristina note e flag PDF
+    if (entry.notes !== undefined) els.notes.value = entry.notes;
+    if (entry.notesInPdf !== undefined) els.notesInPdf.checked = !!entry.notesInPdf;
     renderPlan(entry.name, entry.cal, entry.plan);
     saveLast();
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -626,18 +718,37 @@
     els.tolOut.textContent = `±${els.tol.value}%`;
     saveLast();
   });
+  // Aggiorna la persistenza quando cambiano le note o il flag d'inclusione nel PDF
+  els.notes.addEventListener('input', saveLast);
+  els.notesInPdf.addEventListener('change', saveLast);
   els.gen.addEventListener('click', () => {
     const name = els.name.value.trim();
     const cal  = +els.cal.value;
     const tol  = +els.tol.value;
+    const notesRaw = els.notes.value || '';
+    // Genera liste di inclusione/esclusione a partire dagli input
     const inc  = splitList(els.inc.value);
     const exc  = splitList(els.exc.value);
-    const plan = generatePlan(cal, tol, inc, exc);
+    // Analizza le note e applica le politiche
+    const policy = parseNotes(notesRaw);
+    applyPolicy(policy, inc, exc);
+    // Distribuzione base: 20,10,40,10,20. Applica spostamenti se indicati nella politica
+    let dist = [0.20, 0.10, 0.40, 0.10, 0.20];
+    // sposta quote fra pranzo e cena (o colazione) se necessario
+    if (policy.distroShift) {
+      dist[0] += policy.distroShift.breakfast || 0;
+      dist[2] += policy.distroShift.lunch || 0;
+      dist[4] += policy.distroShift.dinner || 0;
+    }
+    // normalizza
+    const sumD = dist.reduce((a,b) => a + b, 0);
+    dist = dist.map(p => p / sumD);
+    const plan = generatePlanCustom(cal, tol, inc, exc, dist);
     renderPlan(name, cal, plan);
-    // enable save + pdf
+    // abilita pulsanti
     els.save.disabled = false;
     els.pdf.disabled = false;
-    // Scroll to preview for better UX
+    // Scroll to anteprima
     document.querySelector('.preview').scrollIntoView({ behavior:'smooth' });
   });
   els.save.addEventListener('click', () => {
@@ -650,6 +761,8 @@
       inc: els.inc.value,
       exc: els.exc.value,
       tol: +els.tol.value,
+      notes: els.notes.value,
+      notesInPdf: !!els.notesInPdf.checked,
       plan: currentPlanData
     };
     const list = getHistory();
@@ -662,7 +775,9 @@
     const entry = {
       name: els.name.value.trim() || '—',
       cal: +els.cal.value,
-      plan: currentPlanData
+      plan: currentPlanData,
+      notes: (els.notes.value || '').trim(),
+      includeNotes: !!els.notesInPdf.checked
     };
     await exportPDF(entry);
   });
@@ -710,8 +825,39 @@
     page.drawText(`Paziente: ${data.name || '—'}`, { x, y, size: 10, font });
     page.drawText(`Fabbisogno: ${data.cal} kcal`, { x: x + 300, y, size: 10, font });
     y -= 14;
-    page.drawText('Ripartizione: 20% · 10% · 40% · 10% · 20%', { x, y, size: 8.5, font });
+    // Calcola la ripartizione reale (percentuali) basandoti sui target della dieta
+    try {
+      const tot = data.plan.totalKcal || data.cal;
+      const pcs = (data.plan.meals || []).map(m => Math.round((m.target / tot) * 100));
+      const rip = pcs.join('% · ') + '%';
+      page.drawText('Ripartizione: ' + rip, { x, y, size: 8.5, font });
+    } catch(e) {
+      page.drawText('Ripartizione: 20% · 10% · 40% · 10% · 20%', { x, y, size: 8.5, font });
+    }
     y -= 20;
+    // Se richiesto, inserisci un riepilogo delle note sulla pagina
+    if (data.includeNotes && data.notes) {
+      y -= 8;
+      page.drawText('Note / Osservazioni:', { x, y, size: 9.5, font: fontB });
+      y -= 12;
+      // suddividi le note in righe di lunghezza gestibile
+      const txt = String(data.notes);
+      let rem = txt;
+      while (rem.length > 0) {
+        let chunk = rem.slice(0, 90);
+        if (rem.length > 90) {
+          const idx = chunk.lastIndexOf(' ');
+          if (idx > 40) chunk = chunk.slice(0, idx);
+        }
+        const line = chunk.trim();
+        if (line) {
+          page.drawText(line, { x, y, size: 9, font });
+          y -= 10;
+        }
+        rem = rem.slice(chunk.length).trimStart();
+      }
+      y -= 8;
+    }
     // Draw table
     function drawRow(a, b, c, bold = false) {
       const size = bold ? 10 : 9;
