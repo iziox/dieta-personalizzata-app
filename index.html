@@ -304,16 +304,13 @@
       </div>
       <p class="note">I valori inseriti vengono salvati automaticamente e ripristinati al caricamento.</p>
       <div class="history" id="historyList"></div>
-      <!-- Controlli per importare/esportare lo storico: utili per trasferire le diete su altri dispositivi -->
-      <div class="btn-group" style="margin-top:12px;">
-        <button id="exportHist" class="primary">Esporta storico</button>
-        <button id="importHist" class="warn">Importa storico</button>
-        <input type="file" id="importFile" accept=".json" style="display:none;" />
-      </div>
-
-      <!-- Sezione per diete salvate su GitHub: verrà popolata tramite l'API di GitHub per elencare i file nella cartella 'diets' -->
-      <h3 style="margin-top:14px; font-size:1rem;">Diete salvate (GitHub)</h3>
-      <div id="remoteDiets" class="history"></div>
+      <!-- Archivio remoto: consente di salvare la dieta su GitHub e consultarla da altri dispositivi -->
+      <h3 style="margin-top: 20px; font-size: 0.95rem; color: var(--primary-dark);">Archivio remoto</h3>
+      <label for="token" style="display:block; font-size: 0.8rem; margin-top: 6px;">Token GitHub (PAT)</label>
+      <input id="token" type="password" placeholder="Inserisci il token personale per salvare" style="width:100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 0.9rem; margin-bottom: 10px;" />
+      <button id="saveGithub" class="primary" disabled>Salva in Archivio</button>
+      <p class="note">Il token viene memorizzato solo nel browser e utilizzato per salvare la dieta sul repository GitHub.</p>
+      <div id="remoteList" class="history" style="margin-top: 12px;"></div>
     </section>
     <!-- Anteprima -->
     <section class="preview">
@@ -372,9 +369,18 @@
   const lsLast = 'dp2_last';
   const lsHist = 'dp2_history';
 
+  // Chiave localStorage per il token GitHub
+  const lsToken = 'dp2_token';
+
+  // Configurazione repository GitHub per l'archivio remoto
+  const GITHUB_REPO_OWNER = 'iziox';
+  const GITHUB_REPO_NAME  = 'dieta-personalizzata-app';
+  const GITHUB_REPO_BRANCH= 'main';
+  const GITHUB_DIETS_DIR  = 'diets';
+
   // Endpoint pubblico per leggere l'elenco dei file salvati nella cartella 'diets' del repository GitHub.
   // La web app utilizzerà questo endpoint per visualizzare le diete salvate direttamente su GitHub.
-  const REMOTE_DIETS_API = 'https://api.github.com/repos/iziox/dieta-personalizzata-app/contents/diets';
+  // Rimosso supporto per il caricamento remoto delle diete: lo storico rimane solo nel browser
   const els = {
     cal: document.getElementById('calories'),
     calOut: document.getElementById('caloriesOut'),
@@ -393,9 +399,10 @@
     history: document.getElementById('historyList')
     , notes: document.getElementById('notes')
     , notesInPdf: document.getElementById('notesInPdf')
-    , exportHist: document.getElementById('exportHist')
-    , importHist: document.getElementById('importHist')
-    , importFile: document.getElementById('importFile')
+    , token: document.getElementById('token')
+    , saveGithub: document.getElementById('saveGithub')
+    , remoteList: document.getElementById('remoteList')
+    // elementi per l'archivio remoto: token, pulsante di salvataggio e lista remota
   };
   let currentPlanData = null;
 
@@ -420,6 +427,7 @@
       tol: +els.tol.value,
       notes: els.notes.value,
       notesInPdf: !!els.notesInPdf.checked
+      // token: (rimosso)
     };
     localStorage.setItem(lsLast, JSON.stringify(obj));
   }
@@ -435,6 +443,7 @@
       if (o.tol) { els.tol.value = o.tol; els.tolOut.textContent = `±${o.tol}%`; }
       if (o.notes !== undefined) { els.notes.value = o.notes; }
       if (o.notesInPdf !== undefined) { els.notesInPdf.checked = !!o.notesInPdf; }
+      // token property removed
     } catch {}
   }
   function getHistory() {
@@ -453,8 +462,6 @@
     els.history.innerHTML = '';
     if (!arr.length) {
       els.history.innerHTML = '<p style="font-size:0.8rem; color: var(--muted);">Storico vuoto</p>';
-      // Anche se lo storico locale è vuoto, proviamo a caricare le diete salvate da GitHub
-      loadRemoteDiets();
       return;
     }
     for (const item of arr) {
@@ -475,43 +482,117 @@
       div.append(left, right);
       els.history.append(div);
     }
-    // Dopo aver renderizzato lo storico locale, aggiorna anche l'elenco remoto
-    loadRemoteDiets();
+    // Nessun caricamento remoto: lo storico è soltanto locale
   }
 
-  /**
-   * Carica l'elenco dei file nella cartella 'diets' del repository GitHub
-   * e visualizza i link nel contenitore #remoteDiets. Se non ci sono file
-   * o in caso di errore, mostra un messaggio appropriato.
+  /*
+   * Gestione archivio remoto
+   * - loadToken() carica il token GitHub da localStorage e aggiorna l'input
+   * - saveToken() salva il token su localStorage
+   * - updateGithubBtn() abilita/disabilita il pulsante di salvataggio remoto in base alla presenza del token e del piano
+   * - loadRemoteList() recupera la lista dei file salvati nel repository GitHub e li mostra nella sezione 'remoteList'
+   * - savePlanToGithub() salva il piano corrente come file JSON nella cartella 'diets' del repository tramite l'API GitHub
    */
-  async function loadRemoteDiets() {
-    const target = document.getElementById('remoteDiets');
-    if (!target) return;
-    try {
-      const resp = await fetch(REMOTE_DIETS_API);
-      if (!resp.ok) throw new Error('HTTP ' + resp.status);
-      const data = await resp.json();
-      target.innerHTML = '';
-      const files = Array.isArray(data) ? data.filter(f => f.type === 'file') : [];
-      if (!files.length) {
-        target.innerHTML = '<p style="font-size:0.8rem; color: var(--muted);">Nessuna dieta salvata</p>';
-        return;
-      }
-      for (const file of files) {
-        const div = document.createElement('div');
-        const a = document.createElement('a');
-        a.href = file.download_url || file.html_url;
-        a.textContent = file.name;
-        a.target = '_blank';
-        a.style.color = 'var(--primary-dark)';
-        a.style.textDecoration = 'underline';
-        div.appendChild(a);
-        target.appendChild(div);
-      }
-    } catch (e) {
-      target.innerHTML = '<p style="font-size:0.8rem; color: var(--danger);">Errore nel caricamento delle diete salvate</p>';
+  function loadToken() {
+    const t = localStorage.getItem(lsToken) || '';
+    if (els.token) els.token.value = t;
+  }
+  function saveToken() {
+    localStorage.setItem(lsToken, (els.token?.value || '').trim());
+  }
+  function updateGithubBtn() {
+    const token = (els.token?.value || '').trim();
+    // abilita il pulsante solo se esiste un piano generato e il token non è vuoto
+    if (els.saveGithub) {
+      els.saveGithub.disabled = !(currentPlanData && token);
     }
   }
+  async function loadRemoteList() {
+    if (!els.remoteList) return;
+    els.remoteList.innerHTML = '<p style="font-size:0.8rem; color: var(--muted);">Caricamento archivio...</p>';
+    try {
+      const url = `https://api.github.com/repos/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/contents/${GITHUB_DIETS_DIR}`;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error('Errore nel recupero dell\'archivio');
+      const data = await res.json();
+      // Filtra solo file JSON o PDF (evita cartelle)
+      const files = (Array.isArray(data) ? data : []).filter(item => item.type === 'file');
+      if (!files.length) {
+        els.remoteList.innerHTML = '<p style="font-size:0.8rem; color: var(--muted);">Nessuna dieta salvata in archivio.</p>';
+        return;
+      }
+      // Crea elenco
+      const list = document.createElement('div');
+      list.style.display = 'flex';
+      list.style.flexDirection = 'column';
+      list.style.gap = '6px';
+      for (const f of files) {
+        const link = document.createElement('a');
+        link.href = f.download_url || f.html_url;
+        link.textContent = f.name;
+        link.style.fontSize = '0.8rem';
+        link.style.color = '#0369a1';
+        link.style.textDecoration = 'underline';
+        link.target = '_blank';
+        list.appendChild(link);
+      }
+      els.remoteList.innerHTML = '';
+      els.remoteList.appendChild(list);
+    } catch (err) {
+      console.error(err);
+      els.remoteList.innerHTML = '<p style="font-size:0.8rem; color: var(--danger);">Impossibile caricare l\'archivio.</p>';
+    }
+  }
+  async function savePlanToGithub(entry) {
+    const token = (els.token?.value || '').trim();
+    if (!token) {
+      alert('Inserisci un token GitHub valido prima di salvare.');
+      return;
+    }
+    try {
+      // Prepara il payload JSON con nome, calorie, piano e note
+      const payloadObj = {
+        name: entry.name,
+        cal: entry.cal,
+        notes: entry.notes || '',
+        notesInPdf: entry.includeNotes || false,
+        plan: entry.plan
+      };
+      const jsonStr = JSON.stringify(payloadObj, null, 2);
+      // Codifica Base64
+      const encoded = btoa(unescape(encodeURIComponent(jsonStr)));
+      // Crea un nome file univoco (timestamp e nome)
+      const safeName = (entry.name || 'paziente').replace(/[^a-z0-9_-]/gi, '_').slice(0, 30);
+      const fileName = `${new Date().toISOString().replace(/[:.]/g, '-')}_${safeName}.json`;
+      const path = `${GITHUB_DIETS_DIR}/${fileName}`;
+      const apiUrl = `https://api.github.com/repos/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/contents/${path}`;
+      const body = {
+        message: `Aggiungi dieta per ${entry.name} del ${new Date().toLocaleString()}`,
+        content: encoded,
+        branch: GITHUB_REPO_BRANCH
+      };
+      const resp = await fetch(apiUrl, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `token ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(body)
+      });
+      if (!resp.ok) {
+        const t = await resp.text();
+        throw new Error('Errore nel salvataggio: ' + t);
+      }
+      alert('Dieta salvata correttamente nell\'archivio remoto.');
+      // Aggiorna la lista remota
+      await loadRemoteList();
+    } catch (err) {
+      console.error(err);
+      alert('Si è verificato un errore durante il salvataggio nell\'archivio remoto. Verifica il token e riprova.');
+    }
+  }
+
+  // Rimosso: funzione per il caricamento remoto delle diete
   /*
    * Database alimenti: kcal per 100g o per pezzo
    */
@@ -564,8 +645,19 @@
     sweeteners: [
       { key:'miele', name:'Miele', kcal100: 304, unit:'g' },
       { key:'cacao', name:'Cacao amaro', kcal100: 228, unit:'g' }
+    , { key:'caffe', name:'Caffè', kcal100: 2, unit:'ml' }
     ]
   };
+
+  /**
+   * Cerca un alimento per chiave (key) o nome all'interno di tutte le categorie.
+   * Restituisce l'oggetto alimento oppure null se non trovato.
+   */
+  function getFoodByKey(key) {
+    const k = normalize(key);
+    const pools = Object.values(FOODS).flat();
+    return pools.find(f => normalize(f.key) === k || normalize(f.name) === k) || null;
+  }
 
   // Nomi dei giorni della settimana (per la pianificazione settimanale)
   const WEEK_DAYS = ['Lunedì','Martedì','Mercoledì','Giovedì','Venerdì','Sabato','Domenica'];
@@ -585,7 +677,10 @@
       vegan: false,
       lactoseFree: false,
       glutenFree: false,
-      lowSalt: false
+      lowSalt: false,
+      // override lists per pasto
+      customBreakfast: null,
+      customSnack: null
     };
     if (!t) return policy;
     if (t.includes('lattosio')) policy.lactoseFree = true;
@@ -597,6 +692,17 @@
     if (t.includes('post workout') || t.includes('post-workout')) {
       policy.distroShift.dinner += 0.05;
       policy.distroShift.lunch -= 0.05;
+    }
+
+    // Istruzioni esplicite per colazione e spuntini. Ad esempio:
+    // "colazione solo latte e caffe" o "a colazione solo latte e caffe"
+    if (t.includes('colazione solo') && t.includes('latte') && t.includes('caffe')) {
+      // usa latte d'avena e caffe per la colazione
+      policy.customBreakfast = ['latte avena','caffe'];
+    }
+    // Istruzione per spuntino (mattutino/pomeridiano) con solo mela
+    if (t.includes('spuntino') && t.includes('solo') && t.includes('mela')) {
+      policy.customSnack = ['mela'];
     }
     return policy;
   }
@@ -684,6 +790,25 @@
     return items;
   }
   function buildBreakfast(target, inc, exc) {
+    // Se è stata impostata una colazione personalizzata tramite le note,
+    // usa soltanto gli alimenti specificati, ignorando inclusioni/esclusioni.
+    if (window.currentNotePolicy && window.currentNotePolicy.customBreakfast) {
+      const custom = [];
+      for (const k of window.currentNotePolicy.customBreakfast) {
+        const food = getFoodByKey(k);
+        if (food) {
+          // quantità di default: 200 ml per latte, 50 ml per caffè; altrimenti 100 g
+          let qty = 100;
+          if (food.unit === 'ml') {
+            qty = k.includes('latte') ? 200 : 50;
+          }
+          custom.push({ food, qty });
+        }
+      }
+      // adatta le porzioni per raggiungere il target calorico
+      return tunePortions(custom, target);
+    }
+
     const yogurt = FOODS.dairy.find(f => f.key === 'yogurt greco');
     const oats   = FOODS.carbs.find(f => f.key === 'fiocchi avena');
     const fruit  = chooseFood(FOODS.fruits, inc, exc);
@@ -700,6 +825,22 @@
     return tunePortions(items, target);
   }
   function buildSnack(target, inc, exc) {
+    // Se definito uno spuntino personalizzato (mela ecc.), utilizzalo per entrambi gli spuntini
+    if (window.currentNotePolicy && window.currentNotePolicy.customSnack) {
+      const custom = [];
+      for (const k of window.currentNotePolicy.customSnack) {
+        const food = getFoodByKey(k);
+        if (food) {
+          // quantità di default: 150 g per frutta, 30 g per frutta secca
+          let qty = 100;
+          if (food.unit === 'g') {
+            qty = k.includes('mela') ? 150 : 30;
+          }
+          custom.push({ food, qty });
+        }
+      }
+      return tunePortions(custom, target);
+    }
     const fruit = chooseFood(FOODS.fruits, inc, exc);
     const nuts  = chooseFood([FOODS.fats.find(f => f.key === 'mandorle'), FOODS.fats.find(f => f.key === 'noci')].filter(Boolean), inc, exc);
     let items = [ { food: fruit, qty: 140 }, { food: nuts, qty: 15 } ];
@@ -769,6 +910,8 @@
     // abilita pulsanti
     els.save.disabled = false;
     els.pdf.disabled = false;
+    // aggiorna pulsante salvataggio remoto
+    updateGithubBtn();
     // Aggiorna intestazione a "GIORNALIERA"
     const headEl = document.querySelector('#dietHead strong');
     if (headEl) headEl.textContent = 'DIETA PERSONALIZZATA – GIORNALIERA';
@@ -830,6 +973,8 @@
     // Abilita pulsanti
     els.save.disabled = false;
     els.pdf.disabled = false;
+    // aggiorna pulsante salvataggio remoto
+    updateGithubBtn();
   }
   function loadPlan(entry) {
     els.cal.value = entry.cal;
@@ -869,6 +1014,14 @@
   // Aggiorna la persistenza quando cambiano le note o il flag d'inclusione nel PDF
   els.notes.addEventListener('input', saveLast);
   els.notesInPdf.addEventListener('change', saveLast);
+  // Non gestiamo più token GitHub: salvataggio solo locale
+  // Gestione token GitHub: salva su localStorage e aggiorna il pulsante di salvataggio remoto
+  if (els.token) {
+    els.token.addEventListener('input', () => {
+      saveToken();
+      updateGithubBtn();
+    });
+  }
   els.gen.addEventListener('click', () => {
     const name = els.name.value.trim();
     const cal  = +els.cal.value;
@@ -879,6 +1032,8 @@
     const exc  = splitList(els.exc.value);
     // Analizza le note e applica le politiche
     const policy = parseNotes(notesRaw);
+    // Memorizza la politica corrente in una variabile globale affinché i builder possano accedervi
+    window.currentNotePolicy = policy;
     applyPolicy(policy, inc, exc);
     // Distribuzione base: 20,10,40,10,20. Applica spostamenti se indicati nella politica
     let dist = [0.20, 0.10, 0.40, 0.10, 0.20];
@@ -927,6 +1082,21 @@
     };
     await exportPDF(entry);
   });
+
+  // Evento salvataggio remoto
+  if (els.saveGithub) {
+    els.saveGithub.addEventListener('click', async () => {
+      if (!currentPlanData) return;
+      const entry = {
+        name: els.name.value.trim() || '—',
+        cal: +els.cal.value,
+        plan: currentPlanData,
+        notes: (els.notes.value || '').trim(),
+        includeNotes: !!els.notesInPdf.checked
+      };
+      await savePlanToGithub(entry);
+    });
+  }
 
   /*
    * PDF export
@@ -1116,48 +1286,16 @@
     link.click();
     setTimeout(() => URL.revokeObjectURL(link.href), 1000);
   }
-  // ----- Import / Export storico -----
-  // Esporta lo storico in un file JSON
-  els.exportHist.addEventListener('click', () => {
-    const arr = getHistory();
-    const json = JSON.stringify(arr || []);
-    const blob = new Blob([json], { type:'application/json' });
-    const fname = `dieta_storico_${new Date().toISOString().slice(0,10)}.json`;
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = fname;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-  });
-  // Avvia il selettore file per importare uno storico
-  els.importHist.addEventListener('click', () => {
-    els.importFile.click();
-  });
-  // Gestisce l'import dello storico
-  els.importFile.addEventListener('change', (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      try {
-        const arr = JSON.parse(ev.target.result);
-        if (Array.isArray(arr)) {
-          setHistory(arr);
-          renderHistory();
-        } else {
-          alert('File di storico non valido.');
-        }
-      } catch (err) {
-        alert('Errore durante la lettura del file di storico.');
-      }
-    };
-    reader.readAsText(file);
-    // Resetta l'input per permettere successive importazioni
-    e.target.value = '';
-  });
+  // Funzioni di import/export dello storico rimosse: lo storico è gestito esclusivamente in locale.
   // Inizializza
   loadLast();
   renderHistory();
+  // Carica token GitHub e aggiorna pulsante di salvataggio remoto
+  loadToken();
+  updateGithubBtn();
+  // Carica la lista remota delle diete dal repository GitHub
+  loadRemoteList();
+
   </script>
 </body>
 </html>
