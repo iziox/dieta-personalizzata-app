@@ -310,6 +310,10 @@
         <button id="importHist" class="warn">Importa storico</button>
         <input type="file" id="importFile" accept=".json" style="display:none;" />
       </div>
+
+      <!-- Sezione per diete salvate su GitHub: verrà popolata tramite l'API di GitHub per elencare i file nella cartella 'diets' -->
+      <h3 style="margin-top:14px; font-size:1rem;">Diete salvate (GitHub)</h3>
+      <div id="remoteDiets" class="history"></div>
     </section>
     <!-- Anteprima -->
     <section class="preview">
@@ -367,6 +371,10 @@
   /* Stato e localStorage */
   const lsLast = 'dp2_last';
   const lsHist = 'dp2_history';
+
+  // Endpoint pubblico per leggere l'elenco dei file salvati nella cartella 'diets' del repository GitHub.
+  // La web app utilizzerà questo endpoint per visualizzare le diete salvate direttamente su GitHub.
+  const REMOTE_DIETS_API = 'https://api.github.com/repos/iziox/dieta-personalizzata-app/contents/diets';
   const els = {
     cal: document.getElementById('calories'),
     calOut: document.getElementById('caloriesOut'),
@@ -445,6 +453,8 @@
     els.history.innerHTML = '';
     if (!arr.length) {
       els.history.innerHTML = '<p style="font-size:0.8rem; color: var(--muted);">Storico vuoto</p>';
+      // Anche se lo storico locale è vuoto, proviamo a caricare le diete salvate da GitHub
+      loadRemoteDiets();
       return;
     }
     for (const item of arr) {
@@ -464,6 +474,42 @@
       right.append(loadBtn, delBtn);
       div.append(left, right);
       els.history.append(div);
+    }
+    // Dopo aver renderizzato lo storico locale, aggiorna anche l'elenco remoto
+    loadRemoteDiets();
+  }
+
+  /**
+   * Carica l'elenco dei file nella cartella 'diets' del repository GitHub
+   * e visualizza i link nel contenitore #remoteDiets. Se non ci sono file
+   * o in caso di errore, mostra un messaggio appropriato.
+   */
+  async function loadRemoteDiets() {
+    const target = document.getElementById('remoteDiets');
+    if (!target) return;
+    try {
+      const resp = await fetch(REMOTE_DIETS_API);
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      const data = await resp.json();
+      target.innerHTML = '';
+      const files = Array.isArray(data) ? data.filter(f => f.type === 'file') : [];
+      if (!files.length) {
+        target.innerHTML = '<p style="font-size:0.8rem; color: var(--muted);">Nessuna dieta salvata</p>';
+        return;
+      }
+      for (const file of files) {
+        const div = document.createElement('div');
+        const a = document.createElement('a');
+        a.href = file.download_url || file.html_url;
+        a.textContent = file.name;
+        a.target = '_blank';
+        a.style.color = 'var(--primary-dark)';
+        a.style.textDecoration = 'underline';
+        div.appendChild(a);
+        target.appendChild(div);
+      }
+    } catch (e) {
+      target.innerHTML = '<p style="font-size:0.8rem; color: var(--danger);">Errore nel caricamento delle diete salvate</p>';
     }
   }
   /*
